@@ -20,6 +20,8 @@ ngx_create_pool(size_t size, ngx_log_t *log)
 {
     ngx_pool_t  *p;
 
+    /* 分配大小为 size 的内存 */
+    /* ngx_memalign 函数实现于 src/os/unix/ngx_alloc.c 文件中 */
     p = ngx_memalign(NGX_POOL_ALIGNMENT, size, log);
     if (p == NULL) {
         return NULL;
@@ -30,10 +32,10 @@ ngx_create_pool(size_t size, ngx_log_t *log)
     p->d.next = NULL;
     p->d.failed = 0;
 
-    size = size - sizeof(ngx_pool_t);
+    size = size - sizeof(ngx_pool_t); /* 可供分配的空间大小 */
     p->max = (size < NGX_MAX_ALLOC_FROM_POOL) ? size : NGX_MAX_ALLOC_FROM_POOL;
 
-    p->current = p;
+    p->current = p; /* 指向当前的内存池 */
     p->chain = NULL;
     p->large = NULL;
     p->cleanup = NULL;
@@ -95,13 +97,16 @@ ngx_destroy_pool(ngx_pool_t *pool)
     }
 }
 
-
+// 重置内存池由  void ngx_reset_pool(ngx_pool_t *pool)
+// 函数完成。该函数将释放所有 large 内存，并且将 d->last 指针重新指向 ngx_pool_t
+// 结构之后数据区的开始位置，使内存池恢复到刚创建时的位置。由于内存池刚被创建初始化时是不包含大块内存的，所以必须释放大块内存
 void
 ngx_reset_pool(ngx_pool_t *pool)
 {
     ngx_pool_t        *p;
     ngx_pool_large_t  *l;
 
+    /* 遍历大块内存链表，释放大块内存 */
     for (l = pool->large; l; l = l->next) {
         if (l->alloc) {
             ngx_free(l->alloc);
@@ -160,16 +165,24 @@ ngx_palloc_small(ngx_pool_t *pool, size_t size, ngx_uint_t align)
             m = ngx_align_ptr(m, NGX_ALIGNMENT);
         }
 
+        /* 检查现有内存池是否有足够的内存空间，
+         * 若有足够的内存空间，则移动last指针位置，
+         * 并返回所分配的内存地址的起始地址
+         */
         if ((size_t) (p->d.end - m) >= size) {
-            p->d.last = m + size;
+          p->d.last = m + size; /* 在该节点指向的内存块中分配size大小的内存 */
 
-            return m;
+          return m;
         }
 
         p = p->d.next;
 
     } while (p);
 
+    /* 若遍历所有现有内存池链表都没有可用的内存空间，
+     * 则分配一个新的内存池，并将该内存池连接到现有内存池链表中
+     * 同时，返回分配内存的起始地址
+     */
     return ngx_palloc_block(pool, size);
 }
 
@@ -181,7 +194,8 @@ ngx_palloc_block(ngx_pool_t *pool, size_t size)
     size_t       psize;
     ngx_pool_t  *p, *new;
 
-    psize = (size_t) (pool->d.end - (u_char *) pool);
+    /* 计算pool的大小，即需要分配新的block的大小 */
+    psize = (size_t)(pool->d.end - (u_char *)pool);
 
     m = ngx_memalign(NGX_POOL_ALIGNMENT, psize, pool->log);
     if (m == NULL) {
@@ -194,16 +208,20 @@ ngx_palloc_block(ngx_pool_t *pool, size_t size)
     new->d.next = NULL;
     new->d.failed = 0;
 
+    /* 初始化新的内存池 */
+    /* 让m指向该块内存ngx_pool_data_t结构体之后数据区起始位置 */
     m += sizeof(ngx_pool_data_t);
     m = ngx_align_ptr(m, NGX_ALIGNMENT);
     new->d.last = m + size;
 
     for (p = pool->current; p->d.next; p = p->d.next) {
         if (p->d.failed++ > 4) {
-            pool->current = p->d.next;
+          /* 失败4次以上移动current指针 */
+          pool->current = p->d.next;
         }
     }
-
+    
+    /* 将分配的block连接到现有的内存池  */
     p->d.next = new;
 
     return m;
